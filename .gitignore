@@ -1,0 +1,19 @@
+# Sensitive & Environment Files
+.env
+*.env
+
+# Database Dumps & Backups
+*.dump
+*.sql
+
+# Large Local GIS Data (Loaded locally on device via file picker)
+*.gdb/
+*.gpkg
+*.zip
+*.mmpk
+*.pdf
+
+# OS / Editor Files
+.DS_Store
+Thumbs.db
+.vscode/

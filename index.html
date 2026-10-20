@@ -1,0 +1,1680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Universal GeoPDF Field Viewer (Layers + GPS)</title>
+  <link rel="manifest" href="./manifest.json" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.11.0/proj4.js"></script>
+  <style>
+    :root {
+      --bg-dark: #0f172a;
+      --bg-panel: rgba(15, 23, 42, 0.94);
+      --border: rgba(148, 163, 184, 0.22);
+      --accent: #38bdf8;
+      --accent-hover: #0284c7;
+      --gps-blue: #2563eb;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #090d16;
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      touch-action: none;
+    }
+
+    /* Top Bar */
+    .top-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 54px;
+      background: var(--bg-panel);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      z-index: 100;
+      gap: 6px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .brand-badge {
+      background: rgba(56, 189, 248, 0.15);
+      color: var(--accent);
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn {
+      background: #1e293b;
+      color: var(--text-main);
+      border: 1px solid var(--border);
+      padding: 7px 11px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+
+    .btn:hover {
+      background: #334155;
+    }
+
+    .btn:active {
+      transform: scale(0.97);
+    }
+
+    .btn-primary {
+      background: var(--accent-hover);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background: #0369a1;
+    }
+
+    .btn-active {
+      background: rgba(34, 197, 94, 0.2);
+      border-color: var(--success);
+      color: #4ade80;
+    }
+
+    select.dpi-select {
+      background: #1e293b;
+      color: var(--text-main);
+      border: 1px solid var(--border);
+      padding: 6px 8px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      outline: none;
+    }
+
+    /* Map Viewport */
+    #viewport {
+      position: fixed;
+      top: 54px;
+      bottom: 64px;
+      left: 0;
+      right: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at center, #162032 0%, #090d16 100%);
+      cursor: grab;
+    }
+
+    #viewport.dragging {
+      cursor: grabbing;
+    }
+
+    #map-stage {
+      position: absolute;
+      top: 0;
+      left: 0;
+      transform-origin: 0 0;
+      will-change: transform;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.65);
+    }
+
+    #pdf-canvas {
+      display: block;
+      background: #ffffff;
+    }
+
+    #overlay-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    /* Empty State Welcome */
+    #welcome-screen {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+      z-index: 20;
+    }
+
+    .welcome-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px 24px;
+      max-width: 440px;
+      width: 100%;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    }
+
+    .welcome-card h2 {
+      font-size: 20px;
+      margin-bottom: 10px;
+      color: var(--accent);
+    }
+
+    .welcome-card p {
+      font-size: 13.5px;
+      color: var(--text-muted);
+      line-height: 1.55;
+      margin-bottom: 18px;
+    }
+
+    .welcome-features {
+      text-align: left;
+      background: rgba(30, 41, 59, 0.6);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 20px;
+      font-size: 12.5px;
+      color: #cbd5e1;
+      line-height: 1.65;
+    }
+
+    .welcome-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    /* Layers Drawer */
+    #layers-drawer {
+      position: fixed;
+      top: 54px;
+      right: 0;
+      bottom: 64px;
+      width: 320px;
+      max-width: 88vw;
+      background: var(--bg-panel);
+      backdrop-filter: blur(12px);
+      border-left: 1px solid var(--border);
+      z-index: 120;
+      display: flex;
+      flex-direction: column;
+      transform: translateX(102%);
+      transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: -10px 0 30px rgba(0, 0, 0, 0.5);
+    }
+
+    #layers-drawer.open {
+      transform: translateX(0);
+    }
+
+    .drawer-header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .drawer-header h3 {
+      font-size: 14px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .drawer-toolbar {
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      gap: 8px;
+      background: rgba(30, 41, 59, 0.45);
+    }
+
+    .drawer-toolbar .btn {
+      flex: 1;
+      justify-content: center;
+      padding: 5px 8px;
+      font-size: 12px;
+    }
+
+    #layers-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 12px;
+    }
+
+    .layer-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 7px 8px;
+      border-radius: 7px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.12s;
+    }
+
+    .layer-item:hover {
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .layer-item input[type="checkbox"] {
+      width: 17px;
+      height: 17px;
+      accent-color: var(--accent);
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .layer-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      user-select: text;
+    }
+
+    .layer-group-header {
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+
+    /* Floating Map Controls */
+    .fab-stack {
+      position: fixed;
+      right: 12px;
+      bottom: 76px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 90;
+    }
+
+    .fab {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      background: var(--bg-panel);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+    }
+
+    .fab:active {
+      transform: scale(0.94);
+    }
+
+    .fab.gps-active {
+      background: rgba(37, 99, 235, 0.25);
+      border-color: #3b82f6;
+      color: #60a5fa;
+    }
+
+    /* Tapped Point Info Popup */
+    #point-popup {
+      position: fixed;
+      left: 12px;
+      bottom: 76px;
+      background: var(--bg-panel);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 13px;
+      font-size: 12px;
+      line-height: 1.5;
+      z-index: 90;
+      max-width: calc(100vw - 76px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      display: none;
+    }
+
+    #point-popup .popup-title {
+      font-weight: 700;
+      color: var(--accent);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 3px;
+    }
+
+    #point-popup .close-popup {
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 14px;
+      padding: 0 4px;
+    }
+
+    /* Loading Spinner Banner */
+    #status-toast {
+      position: fixed;
+      top: 66px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid var(--accent);
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      font-weight: 600;
+      z-index: 150;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5);
+    }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(56, 189, 248, 0.3);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.75s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Bottom Status Bar */
+    .bottom-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 64px;
+      background: var(--bg-panel);
+      backdrop-filter: blur(10px);
+      border-top: 1px solid var(--border);
+      padding: 6px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 100;
+      gap: 8px;
+    }
+
+    .coord-box {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 11.5px;
+      overflow: hidden;
+    }
+
+    .coord-primary {
+      color: var(--accent);
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .coord-secondary {
+      color: var(--text-muted);
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .crs-pill {
+      background: #1e293b;
+      border: 1px solid var(--border);
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      color: #cbd5e1;
+      text-align: right;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header class="top-bar">
+    <div class="brand">
+      <span>🗺️ GeoPDF Field</span>
+      <span id="pdf-name-badge" class="brand-badge">No PDF Loaded</span>
+    </div>
+
+    <div class="top-actions">
+      <input type="file" id="file-input" accept=".pdf,application/pdf" style="display:none" />
+      <button class="btn btn-primary" onclick="document.getElementById('file-input').click()" title="Open any GeoPDF file">
+        📂 Open PDF
+      </button>
+      <select id="dpi-select" class="dpi-select" onchange="onDpiChange()" title="Render Resolution">
+        <option value="1.0">1.0x Fast</option>
+        <option value="1.5" selected>1.5x Crisp</option>
+        <option value="2.0">2.0x HD</option>
+      </select>
+      <button id="layers-btn" class="btn" onclick="toggleLayersDrawer()" title="Toggle PDF Layers (OCGs)">
+        🗂️ Layers <span id="layer-count">(0)</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Loading / Status Toast -->
+  <div id="status-toast">
+    <div class="spinner"></div>
+    <span id="status-text">Loading GeoPDF...</span>
+  </div>
+
+  <!-- Main Interactive Map Viewport -->
+  <main id="viewport">
+    <div id="welcome-screen">
+      <div class="welcome-card">
+        <h2>Universal GeoPDF Viewer</h2>
+        <p>Open any Geospatial PDF exported from ArcGIS Pro or QGIS with full layer control and live offline GPS.</p>
+        <div class="welcome-features">
+          ✅ <strong>All PDF Layers (OCG):</strong> Show/hide geology, topo, grids &amp; imagery<br/>
+          ✅ <strong>Auto-Projection:</strong> Reads embedded <code>/VP</code> &amp; <code>/WKT</code> (Israel TM Grid / ITM, UTM, WGS84)<br/>
+          ✅ <strong>Offline Field GPS:</strong> Live blue dot, accuracy radius &amp; ITM coordinate readout
+        </div>
+        <div class="welcome-actions">
+          <button class="btn btn-primary" style="justify-content:center; padding:11px;" onclick="document.getElementById('file-input').click()">
+            📂 Select GeoPDF from Device (.pdf)
+          </button>
+          <button id="quick-load-btn" class="btn" style="justify-content:center; padding:10px;" onclick="loadSampleLayoutPdf()">
+            ⚡ Quick-Load ../Layout.pdf
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="map-stage" style="display:none;">
+      <canvas id="pdf-canvas"></canvas>
+      <canvas id="overlay-canvas"></canvas>
+    </div>
+  </main>
+
+  <!-- Slide-out PDF Layers (OCG) Drawer -->
+  <aside id="layers-drawer">
+    <div class="drawer-header">
+      <h3>🗂️ PDF Layers (OCGs)</h3>
+      <button class="btn" style="padding:4px 8px;" onclick="toggleLayersDrawer()">✕</button>
+    </div>
+    <div class="drawer-toolbar">
+      <button class="btn" onclick="setAllLayers(true)">👁️ All On</button>
+      <button class="btn" onclick="setAllLayers(false)">🚫 All Off</button>
+    </div>
+    <div id="layers-list">
+      <div style="color:var(--text-muted); font-size:12.5px; padding:12px;">
+        Open a GeoPDF to inspect and toggle its internal layers.
+      </div>
+    </div>
+  </aside>
+
+  <!-- Tapped Coordinate Inspection Popup -->
+  <div id="point-popup">
+    <div class="popup-title">
+      <span id="popup-header">📍 Map Point</span>
+      <span class="close-popup" onclick="clearTappedPoint()">✕</span>
+    </div>
+    <div id="popup-body"></div>
+  </div>
+
+  <!-- Floating Zoom & GPS Controls -->
+  <div class="fab-stack">
+    <button id="gps-fab" class="fab" onclick="toggleRealGps()" title="Toggle Live Hardware GPS">📍</button>
+    <button id="sim-gps-fab" class="fab" onclick="simulateGpsInMap()" title="Simulate / Test GPS Point Inside Map">🎯</button>
+    <button class="fab" onclick="zoomBy(1.35)" title="Zoom In">➕</button>
+    <button class="fab" onclick="zoomBy(1/1.35)" title="Zoom Out">➖</button>
+    <button class="fab" onclick="fitMapToScreen()" title="Fit PDF to Screen">⛶</button>
+  </div>
+
+  <!-- Bottom Coordinate & Projection Bar -->
+  <footer class="bottom-bar">
+    <div class="coord-box">
+      <div id="coord-proj" class="coord-primary">ITM: --- E, --- N</div>
+      <div id="coord-wgs" class="coord-secondary">WGS84: ---° N, ---° E | Tap map to measure</div>
+    </div>
+    <div class="crs-pill">
+      <div id="crs-name" style="font-weight:700; color:#38bdf8;">CRS: Waiting</div>
+      <div id="gps-status-label" style="font-size:10px; color:var(--text-muted);">GPS: Idle</div>
+    </div>
+  </footer>
+
+  <script>
+    // Configure PDF.js worker
+    if (window.pdfjsLib) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc =
+        'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
+
+    // Register Service Worker for offline field use
+    if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+      navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
+
+    // =========================================================================
+    // 1. GEOPDF PROJECTION & AFFINE TRANSFORMATION ENGINE
+    //    Supports Israel TM Grid (ITM / EPSG:2039), UTM, and arbitrary WKT
+    // =========================================================================
+    class GeoPdfCalibration {
+      constructor() {
+        this.valid = false;
+        this.crsName = 'Uncalibrated PDF';
+        this.isITM = false;
+        this.pageWidth = 1;
+        this.pageHeight = 1;
+        this.bbox = null;
+        this.gpts = null;
+        this.lpts = null;
+        this.wkt = null;
+        this.tmParams = null;
+        // Affine matrices: Projected (E, N) <-> PDF Page Top-Down Points (px, py)
+        this.projToPdf = null;
+        this.pdfToProj = null;
+      }
+
+      /**
+       * Parse ISO 32000 /VP dictionary from raw PDF buffer
+       */
+      parseFromBuffer(arrayBuffer, pageWidth, pageHeight) {
+        this.pageWidth = pageWidth;
+        this.pageHeight = pageHeight;
+        this.valid = false;
+
+        // Decode latin1 chunks where /VP / /GPTS live (scan last 2MB first for speed, then full file if needed)
+        const bytes = new Uint8Array(arrayBuffer);
+        const decoder = new TextDecoder('latin1');
+        let text = '';
+        const tailStart = Math.max(0, bytes.length - 2 * 1024 * 1024);
+        text = decoder.decode(bytes.subarray(tailStart));
+        if (!text.includes('/GPTS')) {
+          text = decoder.decode(bytes);
+        }
+
+        const vpIdx = text.lastIndexOf('/VP');
+        const searchSlice = vpIdx !== -1 ? text.slice(vpIdx, vpIdx + 8000) : text;
+
+        const bboxMatch = searchSlice.match(/\/BBox\s*\[\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s*\]/);
+        const gptsMatch = searchSlice.match(/\/GPTS\s*\[\s*([-\d.\s]+?)\s*\]/);
+        const lptsMatch = searchSlice.match(/\/LPTS\s*\[\s*([-\d.\s]+?)\s*\]/);
+        const wktMatch = searchSlice.match(/\/WKT\s*\(([\s\S]+?)\)\s*>>/);
+
+        if (!bboxMatch || !gptsMatch) {
+          this.crsName = 'Page Space (No /VP)';
+          return false;
+        }
+
+        this.bbox = bboxMatch.slice(1, 5).map(Number);
+        this.gpts = gptsMatch[1].trim().split(/\s+/).map(Number);
+        this.lpts = lptsMatch
+          ? lptsMatch[1].trim().split(/\s+/).map(Number)
+          : [0, 0, 0, 1, 1, 1, 1, 0];
+        this.wkt = wktMatch ? wktMatch[1].replace(/\\([()])/g, '$1') : '';
+
+        // Parse CRS name and Transverse Mercator parameters from WKT
+        const nameMatch = this.wkt.match(/(?:PROJCS|GEOGCS)\["([^"]+)"/);
+        this.crsName = nameMatch ? nameMatch[1] : 'GeoPDF CRS';
+        this.isITM = /Israel_TM_Grid|Israel_1993|2039/i.test(this.wkt);
+
+        this.tmParams = this.extractTMParams(this.wkt);
+
+        // Configure Proj4 if loaded and non-TM WKT is used
+        if (window.proj4 && this.wkt) {
+          try {
+            this.proj4Def = proj4(this.wkt);
+          } catch (e) {
+            this.proj4Def = null;
+          }
+        }
+
+        // Build corner pairs: LPTS (lx, ly) -> PDF Page Top-Down (px, py) and Projected (E, N)
+        const [bx0, by0, bx1, by1] = this.bbox;
+        const xMin = Math.min(bx0, bx1);
+        const xMax = Math.max(bx0, bx1);
+        const yMin = Math.min(by0, by1);
+        const yMax = Math.max(by0, by1);
+
+        const pdfPts = [];
+        const projPts = [];
+
+        for (let i = 0; i < 4; i++) {
+          const lat = this.gpts[i * 2];
+          const lon = this.gpts[i * 2 + 1];
+          const lx = this.lpts[i * 2];
+          const ly = this.lpts[i * 2 + 1];
+
+          // PDF bottom-up (x_pdf, y_pdf) -> top-down canvas point (px, py)
+          const xPdf = xMin + lx * (xMax - xMin);
+          const yPdf = yMin + ly * (yMax - yMin);
+          const px = xPdf;
+          const py = this.pageHeight - yPdf;
+
+          // Project GPTS (which are in the WKT's native GEOGCS) into Projected (E, N)
+          const [E, N] = this.geogToProj(lat, lon, false);
+          pdfPts.push([px, py]);
+          projPts.push([E, N]);
+        }
+
+        this.projToPdf = this.solveAffine(projPts, pdfPts);
+        this.pdfToProj = this.solveAffine(pdfPts, projPts);
+        this.valid = true;
+        return true;
+      }
+
+      extractTMParams(wkt) {
+        const getParam = (name, fallback) => {
+          const re = new RegExp(`PARAMETER\\["${name}"\\s*,\\s*([-\\d.]+)\\]`, 'i');
+          const m = wkt.match(re);
+          return m ? parseFloat(m[1]) : fallback;
+        };
+        const spMatch = wkt.match(/SPHEROID\["[^"]+"\s*,\s*([-\d.]+)\s*,\s*([-\d.]+)\]/i);
+        const a = spMatch ? parseFloat(spMatch[1]) : 6378137.0;
+        const invF = spMatch ? parseFloat(spMatch[2]) : 298.257222101;
+
+        if (/Transverse_Mercator/i.test(wkt) || this.isITM) {
+          return {
+            a,
+            f: 1.0 / invF,
+            lat0: getParam('Latitude_Of_Origin', 31.73439361111111) * Math.PI / 180,
+            lon0: getParam('Central_Meridian', 35.20451694444445) * Math.PI / 180,
+            k0: getParam('Scale_Factor', 1.0000067),
+            x0: getParam('False_Easting', 219529.584),
+            y0: getParam('False_Northing', 626907.39)
+          };
+        }
+        return null;
+      }
+
+      /**
+       * Datum shift between WGS84 (GPS) and Israel 1993 / GRS80 (Survey of Israel 7-parameter Helmert)
+       */
+      wgs84ToIsraelGeog(latDeg, lonDeg) {
+        const a = 6378137.0;
+        const f = 1.0 / 298.257223563;
+        const e2 = 2 * f - f * f;
+        const lat = latDeg * Math.PI / 180;
+        const lon = lonDeg * Math.PI / 180;
+        const sinLat = Math.sin(lat), cosLat = Math.cos(lat);
+        const sinLon = Math.sin(lon), cosLon = Math.cos(lon);
+        const v = a / Math.sqrt(1 - e2 * sinLat * sinLat);
+
+        const x1 = v * cosLat * cosLon;
+        const y1 = v * cosLat * sinLon;
+        const z1 = v * (1 - e2) * sinLat;
+
+        // WGS84 -> Israel 1993 datum parameters
+        const dx = 24.0024, dy = 17.1032, dz = 17.8444;
+        const rx = -0.33077 * Math.PI / (180 * 3600);
+        const ry = -1.85269 * Math.PI / (180 * 3600);
+        const rz = 1.66969 * Math.PI / (180 * 3600);
+        const s = -5.4248 * 1e-6;
+
+        const x2 = dx + (1 + s) * (x1 - rz * y1 + ry * z1);
+        const y2 = dy + (1 + s) * (rz * x1 + y1 - rx * z1);
+        const z2 = dz + (1 + s) * (-ry * x1 + rx * y1 + z1);
+
+        const p = Math.sqrt(x2 * x2 + y2 * y2);
+        const lon2 = Math.atan2(y2, x2);
+        let lat2 = Math.atan2(z2, p * (1 - e2));
+        for (let i = 0; i < 4; i++) {
+          const v2 = a / Math.sqrt(1 - e2 * Math.sin(lat2) ** 2);
+          lat2 = Math.atan2(z2 + e2 * v2 * Math.sin(lat2), p);
+        }
+        return [lat2 * 180 / Math.PI, lon2 * 180 / Math.PI];
+      }
+
+      israelGeogToWgs84(latDeg, lonDeg) {
+        const [shiftedLat, shiftedLon] = this.wgs84ToIsraelGeog(latDeg, lonDeg);
+        return [2 * latDeg - shiftedLat, 2 * lonDeg - shiftedLon];
+      }
+
+      /**
+       * Convert Geographic (lat, lon) -> Projected (Easting, Northing)
+       * @param {boolean} fromWgs84Gps True if input is from live WGS84 GPS sensor
+       */
+      geogToProj(latDeg, lonDeg, fromWgs84Gps = true) {
+        let lat = latDeg, lon = lonDeg;
+        if (fromWgs84Gps && this.isITM) {
+          [lat, lon] = this.wgs84ToIsraelGeog(latDeg, lonDeg);
+        }
+
+        if (this.tmParams) {
+          const { a, f, lat0, lon0, k0, x0, y0 } = this.tmParams;
+          const e2 = 2 * f - f * f;
+          const ep2 = e2 / (1 - e2);
+          const phi = lat * Math.PI / 180;
+          const lam = lon * Math.PI / 180;
+
+          const N = a / Math.sqrt(1 - e2 * Math.sin(phi) ** 2);
+          const T = Math.tan(phi) ** 2;
+          const C = ep2 * Math.cos(phi) ** 2;
+          const A = (lam - lon0) * Math.cos(phi);
+
+          const meridianArc = (p) => {
+            const e4 = e2 * e2, e6 = e4 * e2;
+            return a * (
+              (1 - e2 / 4 - 3 * e4 / 64 - 5 * e6 / 256) * p -
+              (3 * e2 / 8 + 3 * e4 / 32 + 45 * e6 / 1024) * Math.sin(2 * p) +
+              (15 * e4 / 256 + 45 * e6 / 1024) * Math.sin(4 * p) -
+              (35 * e6 / 3072) * Math.sin(6 * p)
+            );
+          };
+
+          const M = meridianArc(phi);
+          const M0 = meridianArc(lat0);
+
+          const easting = x0 + k0 * N * (
+            A +
+            (1 - T + C) * (A ** 3) / 6 +
+            (5 - 18 * T + T * T + 72 * C - 58 * ep2) * (A ** 5) / 120
+          );
+
+          const northing = y0 + k0 * (
+            M - M0 + N * Math.tan(phi) * (
+              (A * A) / 2 +
+              (5 - T + 9 * C + 4 * C * C) * (A ** 4) / 24 +
+              (61 - 58 * T + T * T + 600 * C - 330 * ep2) * (A ** 6) / 720
+            )
+          );
+          return [easting, northing];
+        }
+
+        if (this.proj4Def) {
+          return this.proj4Def.forward([lon, lat]);
+        }
+
+        return [lon, lat];
+      }
+
+      /**
+       * Inverse: Projected (Easting, Northing) -> WGS84 (lat, lon)
+       */
+      projToWgs84(easting, northing) {
+        if (this.tmParams) {
+          const { a, f, lat0, lon0, k0, x0, y0 } = this.tmParams;
+          const e2 = 2 * f - f * f;
+          const ep2 = e2 / (1 - e2);
+          const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+
+          const e4 = e2 * e2, e6 = e4 * e2;
+          const M0 = a * (
+            (1 - e2 / 4 - 3 * e4 / 64 - 5 * e6 / 256) * lat0 -
+            (3 * e2 / 8 + 3 * e4 / 32 + 45 * e6 / 1024) * Math.sin(2 * lat0) +
+            (15 * e4 / 256 + 45 * e6 / 1024) * Math.sin(4 * lat0) -
+            (35 * e6 / 3072) * Math.sin(6 * lat0)
+          );
+
+          const M = M0 + (northing - y0) / k0;
+          const mu = M / (a * (1 - e2 / 4 - 3 * e4 / 64 - 5 * e6 / 256));
+
+          const phi1 = mu +
+            (3 * e1 / 2 - 27 * (e1 ** 3) / 32) * Math.sin(2 * mu) +
+            (21 * e1 * e1 / 16 - 55 * (e1 ** 4) / 32) * Math.sin(4 * mu) +
+            (151 * (e1 ** 3) / 96) * Math.sin(6 * mu);
+
+          const N1 = a / Math.sqrt(1 - e2 * Math.sin(phi1) ** 2);
+          const T1 = Math.tan(phi1) ** 2;
+          const C1 = ep2 * Math.cos(phi1) ** 2;
+          const R1 = a * (1 - e2) / Math.pow(1 - e2 * Math.sin(phi1) ** 2, 1.5);
+          const D = (easting - x0) / (N1 * k0);
+
+          const phi = phi1 - (N1 * Math.tan(phi1) / R1) * (
+            (D * D) / 2 -
+            (5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * ep2) * (D ** 4) / 24 +
+            (61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 252 * ep2 - 3 * C1 * C1) * (D ** 6) / 720
+          );
+
+          const lam = lon0 + (
+            D -
+            (1 + 2 * T1 + C1) * (D ** 3) / 6 +
+            (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * ep2 + 24 * T1 * T1) * (D ** 5) / 120
+          ) / Math.cos(phi1);
+
+          const latDeg = phi * 180 / Math.PI;
+          const lonDeg = lam * 180 / Math.PI;
+          if (this.isITM) {
+            return this.israelGeogToWgs84(latDeg, lonDeg);
+          }
+          return [latDeg, lonDeg];
+        }
+
+        if (this.proj4Def) {
+          const [lon, lat] = this.proj4Def.inverse([easting, northing]);
+          return [lat, lon];
+        }
+
+        return [northing, easting];
+      }
+
+      solveAffine(srcPts, dstPts) {
+        // Least squares for [dstX, dstY] = [a0 + a1*srcX + a2*srcY, b0 + b1*srcX + b2*srcY]
+        let s1 = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+        let sdx = 0, sxdx = 0, sydx = 0, sdy = 0, sxdy = 0, sydy = 0;
+        for (let i = 0; i < srcPts.length; i++) {
+          const [x, y] = srcPts[i];
+          const [dx, dy] = dstPts[i];
+          s1 += 1; sx += x; sy += y;
+          sxx += x * x; syy += y * y; sxy += x * y;
+          sdx += dx; sxdx += x * dx; sydx += y * dx;
+          sdy += dy; sxdy += x * dy; sydy += y * dy;
+        }
+        const M = [
+          [s1, sx, sy],
+          [sx, sxx, sxy],
+          [sy, sxy, syy]
+        ];
+        const solve3x3 = (A, B) => {
+          const m = A.map((r, i) => [...r, B[i]]);
+          for (let i = 0; i < 3; i++) {
+            let maxRow = i;
+            for (let k = i + 1; k < 3; k++) {
+              if (Math.abs(m[k][i]) > Math.abs(m[maxRow][i])) maxRow = k;
+            }
+            [m[i], m[maxRow]] = [m[maxRow], m[i]];
+            for (let k = i + 1; k < 3; k++) {
+              const c = -m[k][i] / m[i][i];
+              for (let j = i; j < 4; j++) m[k][j] += c * m[i][j];
+            }
+          }
+          const x = [0, 0, 0];
+          for (let i = 2; i >= 0; i--) {
+            x[i] = m[i][3] / m[i][i];
+            for (let k = i - 1; k >= 0; k--) m[k][3] -= m[k][i] * x[i];
+          }
+          return x;
+        };
+        const a = solve3x3(M, [sdx, sxdx, sydx]);
+        const b = solve3x3(M, [sdy, sxdy, sydy]);
+        return { a, b };
+      }
+
+      applyAffine(mat, x, y) {
+        return [
+          mat.a[0] + mat.a[1] * x + mat.a[2] * y,
+          mat.b[0] + mat.b[1] * x + mat.b[2] * y
+        ];
+      }
+
+      wgs84ToPdfPoint(lat, lon) {
+        const [E, N] = this.geogToProj(lat, lon, true);
+        const [px, py] = this.applyAffine(this.projToPdf, E, N);
+        return { px, py, E, N };
+      }
+
+      pdfPointToCoords(px, py) {
+        const [E, N] = this.applyAffine(this.pdfToProj, px, py);
+        const [lat, lon] = this.projToWgs84(E, N);
+        return { E, N, lat, lon };
+      }
+
+      getPixelsPerMeter() {
+        if (!this.projToPdf) return 0.0567;
+        return Math.hypot(this.projToPdf.a[1], this.projToPdf.b[1]);
+      }
+    }
+
+    // =========================================================================
+    // 2. APPLICATION STATE & PDF RENDERING ENGINE
+    // =========================================================================
+    const calibration = new GeoPdfCalibration();
+    let pdfDoc = null;
+    let pdfPage = null;
+    let ocConfig = null;
+    let rawOrderTree = null;
+    let currentRenderTask = null;
+    let renderScale = 1.5;
+    let renderSeq = 0;
+
+    // Pan / Zoom state
+    let viewX = 0, viewY = 0, viewZoom = 1;
+    let isDragging = false;
+    let dragStartX = 0, dragStartY = 0;
+    let initialPinchDist = null;
+    let initialPinchZoom = 1;
+    let pinchCenterX = 0, pinchCenterY = 0;
+
+    // GPS & Measurement state
+    let gpsWatchId = null;
+    let gpsPosition = null; // { lat, lon, accuracy, heading, simulated }
+    let tappedPoint = null; // { px, py, E, N, lat, lon }
+
+    const viewportEl = document.getElementById('viewport');
+    const stageEl = document.getElementById('map-stage');
+    const pdfCanvas = document.getElementById('pdf-canvas');
+    const overlayCanvas = document.getElementById('overlay-canvas');
+
+    function showToast(msg) {
+      const t = document.getElementById('status-toast');
+      document.getElementById('status-text').textContent = msg;
+      t.style.display = 'flex';
+    }
+
+    function hideToast() {
+      document.getElementById('status-toast').style.display = 'none';
+    }
+
+    // Handle local file input
+    document.getElementById('file-input').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      showToast(`Reading ${file.name}...`);
+      const buffer = await file.arrayBuffer();
+      await loadGeoPdfFromBuffer(buffer, file.name);
+    });
+
+    // Quick-load ../Layout.pdf when testing locally
+    async function loadSampleLayoutPdf() {
+      try {
+        showToast('Fetching ../Layout.pdf...');
+        const res = await fetch('../Layout.pdf');
+        if (!res.ok) throw new Error('Use "Select GeoPDF" button to pick Layout.pdf');
+        const buffer = await res.arrayBuffer();
+        await loadGeoPdfFromBuffer(buffer, 'Layout.pdf');
+      } catch (err) {
+        hideToast();
+        document.getElementById('file-input').click();
+      }
+    }
+
+    /**
+     * Parse raw /Order [ ... ] hierarchy from PDF catalog so nested OCG arrays
+     * like [ 10 0 R [ 6448 0 R ... 11 0 R [ 811 0 R 806 0 R 83 0 R [ ... ] ] ] ]
+     * preserve their full parent-child tree even when PDF.js flattens unnamed sub-arrays.
+     */
+    function extractRawOrderTree(arrayBuffer) {
+      try {
+        const bytes = new Uint8Array(arrayBuffer);
+        const decoder = new TextDecoder('latin1');
+        const text = decoder.decode(bytes);
+        const idx = text.lastIndexOf('/Order');
+        if (idx === -1) return null;
+
+        const slice = text.slice(idx);
+        const start = slice.indexOf('[');
+        if (start === -1) return null;
+
+        let depth = 0;
+        let end = -1;
+        for (let i = start; i < slice.length; i++) {
+          if (slice[i] === '[') depth++;
+          else if (slice[i] === ']') {
+            depth--;
+            if (depth === 0) {
+              end = i + 1;
+              break;
+            }
+          }
+        }
+        if (end === -1) return null;
+
+        const rawOrder = slice.slice(start, end);
+        // Tokenize '[', ']', and '<num> 0 R'
+        const tokens = [];
+        const re = /\[|\]|(\d+)\s+\d+\s+R/g;
+        let m;
+        while ((m = re.exec(rawOrder)) !== null) {
+          if (m[0] === '[' || m[0] === ']') {
+            tokens.push(m[0]);
+          } else {
+            tokens.push(`${m[1]}R`);
+          }
+        }
+
+        let pos = 0;
+        const parseList = () => {
+          const arr = [];
+          while (pos < tokens.length) {
+            const tok = tokens[pos++];
+            if (tok === '[') {
+              arr.push(parseList());
+            } else if (tok === ']') {
+              break;
+            } else {
+              arr.push(tok);
+            }
+          }
+          return arr;
+        };
+
+        if (tokens[0] === '[') {
+          pos = 1;
+          return parseList();
+        }
+      } catch (e) {
+        console.warn('Raw /Order parse fallback:', e);
+      }
+      return null;
+    }
+
+    async function loadGeoPdfFromBuffer(arrayBuffer, fileName) {
+      try {
+        showToast(`Parsing PDF & Layers...`);
+        // Clone buffer before PDF.js transfers it to WebWorker
+        const bufferCopy = arrayBuffer.slice(0);
+        rawOrderTree = extractRawOrderTree(bufferCopy);
+
+        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+        pdfDoc = await loadingTask.promise;
+        pdfPage = await pdfDoc.getPage(1);
+
+        const baseViewport = pdfPage.getViewport({ scale: 1.0 });
+        calibration.parseFromBuffer(bufferCopy, baseViewport.width, baseViewport.height);
+
+        document.getElementById('pdf-name-badge').textContent = fileName;
+        document.getElementById('crs-name').textContent = calibration.crsName;
+        document.getElementById('welcome-screen').style.display = 'none';
+        stageEl.style.display = 'block';
+
+        // Extract Optional Content Groups (PDF Layers)
+        ocConfig = await pdfDoc.getOptionalContentConfig();
+        buildLayersUI();
+
+        await renderPdfPage(true);
+      } catch (err) {
+        hideToast();
+        alert('Error loading PDF: ' + err.message);
+      }
+    }
+
+    async function renderPdfPage(fitAfterRender = false) {
+      if (!pdfPage) return;
+      const mySeq = ++renderSeq;
+
+      if (currentRenderTask) {
+        try { currentRenderTask.cancel(); } catch (e) {}
+        try { await currentRenderTask.promise; } catch (e) {}
+      }
+      if (mySeq !== renderSeq) return;
+
+      renderScale = parseFloat(document.getElementById('dpi-select').value || '1.5');
+      showToast(`Rendering layers (${renderScale}x)...`);
+
+      const viewport = pdfPage.getViewport({ scale: renderScale });
+      const targetW = Math.floor(viewport.width);
+      const targetH = Math.floor(viewport.height);
+
+      // Render into an offscreen canvas first to prevent white flashes or canvas lock errors
+      const offscreen = document.createElement('canvas');
+      offscreen.width = targetW;
+      offscreen.height = targetH;
+      const offCtx = offscreen.getContext('2d', { alpha: false });
+      offCtx.fillStyle = '#ffffff';
+      offCtx.fillRect(0, 0, targetW, targetH);
+
+      try {
+        currentRenderTask = pdfPage.render({
+          canvasContext: offCtx,
+          viewport: viewport,
+          optionalContentConfigPromise: Promise.resolve(ocConfig)
+        });
+        await currentRenderTask.promise;
+        currentRenderTask = null;
+        if (mySeq !== renderSeq) return;
+
+        pdfCanvas.width = targetW;
+        pdfCanvas.height = targetH;
+        overlayCanvas.width = targetW;
+        overlayCanvas.height = targetH;
+
+        const mainCtx = pdfCanvas.getContext('2d', { alpha: false });
+        mainCtx.drawImage(offscreen, 0, 0);
+
+        hideToast();
+
+        if (fitAfterRender) {
+          fitMapToScreen();
+        } else {
+          drawOverlays();
+        }
+      } catch (err) {
+        if (err && err.name !== 'RenderingCancelledException') {
+          hideToast();
+          console.error(err);
+        }
+      }
+    }
+
+    function onDpiChange() {
+      if (!pdfPage) return;
+      const oldScale = renderScale;
+      const newScale = parseFloat(document.getElementById('dpi-select').value);
+      const ratio = newScale / oldScale;
+      viewZoom /= ratio;
+      renderPdfPage(false);
+      updateStageTransform();
+    }
+
+    // =========================================================================
+    // 3. PDF LAYER (OCG) TREE BUILDER & TOGGLING
+    // =========================================================================
+    let layerCheckboxes = [];
+
+    function buildLayersUI() {
+      const listEl = document.getElementById('layers-list');
+      listEl.innerHTML = '';
+      layerCheckboxes = [];
+
+      if (!ocConfig) {
+        document.getElementById('layer-count').textContent = '(0)';
+        listEl.innerHTML = '<div style="padding:12px; color:var(--text-muted);">No OCG layers found in this PDF.</div>';
+        return;
+      }
+
+      const groups = ocConfig.getGroups();
+      const pdfJsOrder = ocConfig.getOrder();
+      if (!groups) {
+        document.getElementById('layer-count').textContent = '(0)';
+        return;
+      }
+
+      const visited = new Set();
+      let count = 0;
+
+      const collectChildIds = (node, out = []) => {
+        if (!node) return out;
+        if (Array.isArray(node)) {
+          for (const el of node) collectChildIds(el, out);
+        } else if (typeof node === 'object' && Array.isArray(node.order)) {
+          for (const el of node.order) collectChildIds(el, out);
+        } else if (typeof node === 'string') {
+          out.push(node);
+        }
+        return out;
+      };
+
+      const addLayerRow = (id, depth, childIds) => {
+        if (!groups[id] || visited.has(id)) return;
+        visited.add(id);
+        count++;
+
+        const group = groups[id];
+        const row = document.createElement('label');
+        row.className = 'layer-item' + (depth === 0 || childIds.length > 0 ? ' layer-group-header' : '');
+        row.style.paddingLeft = `${8 + depth * 16}px`;
+
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = group.visible !== false;
+        cb.dataset.layerId = id;
+
+        cb.addEventListener('change', () => {
+          ocConfig.setVisibility(id, cb.checked);
+          if (childIds.length > 0) {
+            for (const cid of childIds) {
+              ocConfig.setVisibility(cid, cb.checked);
+              const found = layerCheckboxes.find(x => x.id === cid);
+              if (found) found.cb.checked = cb.checked;
+            }
+          }
+          renderPdfPage(false);
+        });
+
+        const span = document.createElement('span');
+        span.className = 'layer-name';
+        span.textContent = group.name || `Layer ${id}`;
+
+        row.appendChild(cb);
+        row.appendChild(span);
+        listEl.appendChild(row);
+        layerCheckboxes.push({ id, cb });
+      };
+
+      const renderTree = (items, depth = 0) => {
+        if (!items) return;
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (Array.isArray(item)) {
+            renderTree(item, depth + 1);
+          } else if (item && typeof item === 'object' && Array.isArray(item.order)) {
+            renderTree(item.order, item.name ? depth + 1 : depth);
+          } else if (typeof item === 'string' && groups[item]) {
+            const nextItem = i + 1 < items.length ? items[i + 1] : null;
+            const isNextNested =
+              Array.isArray(nextItem) ||
+              (nextItem && typeof nextItem === 'object' && Array.isArray(nextItem.order));
+            const childIds = isNextNested ? collectChildIds(nextItem) : [];
+            addLayerRow(item, depth, childIds);
+            if (isNextNested) {
+              renderTree(Array.isArray(nextItem) ? nextItem : nextItem.order, depth + 1);
+              i++; // skip nested container since we rendered it under its parent
+            }
+          }
+        }
+      };
+
+      // 1. Render using raw /Order hierarchy if available
+      if (rawOrderTree && rawOrderTree.length > 0) {
+        renderTree(rawOrderTree, 0);
+      }
+      // 2. Render any remaining items from PDF.js getOrder()
+      if (pdfJsOrder) {
+        renderTree(pdfJsOrder, 0);
+      }
+      // 3. Ensure every group in groups dictionary is listed
+      for (const id of Object.keys(groups)) {
+        if (!visited.has(id)) {
+          addLayerRow(id, 0, []);
+        }
+      }
+
+      document.getElementById('layer-count').textContent = `(${count})`;
+    }
+
+    function setAllLayers(visible) {
+      if (!ocConfig || layerCheckboxes.length === 0) return;
+      for (const { id, cb } of layerCheckboxes) {
+        cb.checked = visible;
+        ocConfig.setVisibility(id, visible);
+      }
+      renderPdfPage(false);
+    }
+
+    function toggleLayersDrawer() {
+      document.getElementById('layers-drawer').classList.toggle('open');
+    }
+
+    // =========================================================================
+    // 4. TOUCH & MOUSE PAN / ZOOM VIEWPORT
+    // =========================================================================
+    function updateStageTransform() {
+      stageEl.style.transform = `translate3d(${viewX}px, ${viewY}px, 0) scale(${viewZoom})`;
+      drawOverlays();
+    }
+
+    function fitMapToScreen() {
+      if (!pdfCanvas.width) return;
+      const vw = viewportEl.clientWidth;
+      const vh = viewportEl.clientHeight;
+      const scaleX = (vw - 24) / pdfCanvas.width;
+      const scaleY = (vh - 24) / pdfCanvas.height;
+      viewZoom = Math.min(scaleX, scaleY);
+      viewX = (vw - pdfCanvas.width * viewZoom) / 2;
+      viewY = (vh - pdfCanvas.height * viewZoom) / 2;
+      updateStageTransform();
+    }
+
+    function zoomBy(factor, centerX = viewportEl.clientWidth / 2, centerY = viewportEl.clientHeight / 2) {
+      const newZoom = Math.max(0.08, Math.min(18, viewZoom * factor));
+      const actualFactor = newZoom / viewZoom;
+      viewX = centerX - (centerX - viewX) * actualFactor;
+      viewY = centerY - (centerY - viewY) * actualFactor;
+      viewZoom = newZoom;
+      updateStageTransform();
+    }
+
+    // Mouse Events
+    let pointerDownTime = 0;
+    let pointerDownPos = { x: 0, y: 0 };
+
+    viewportEl.addEventListener('mousedown', (e) => {
+      if (e.target.closest('#welcome-screen')) return;
+      isDragging = true;
+      pointerDownTime = Date.now();
+      pointerDownPos = { x: e.clientX, y: e.clientY };
+      dragStartX = e.clientX - viewX;
+      dragStartY = e.clientY - viewY;
+      viewportEl.classList.add('dragging');
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      viewX = e.clientX - dragStartX;
+      viewY = e.clientY - dragStartY;
+      updateStageTransform();
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      if (!isDragging) return;
+      isDragging = false;
+      viewportEl.classList.remove('dragging');
+      const dist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
+      if (dist < 6 && Date.now() - pointerDownTime < 350) {
+        onMapTap(e.clientX, e.clientY);
+      }
+    });
+
+    viewportEl.addEventListener('wheel', (e) => {
+      if (!pdfPage) return;
+      e.preventDefault();
+      const rect = viewportEl.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.18 : 1 / 1.18;
+      zoomBy(factor, cx, cy);
+    }, { passive: false });
+
+    // Touch Events (1-finger pan, 2-finger pinch-zoom, tap to inspect)
+    viewportEl.addEventListener('touchstart', (e) => {
+      if (e.target.closest('#welcome-screen')) return;
+      if (e.touches.length === 1) {
+        isDragging = true;
+        pointerDownTime = Date.now();
+        pointerDownPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+        dragStartX = e.touches[0].clientX - viewX;
+        dragStartY = e.touches[0].clientY - viewY;
+      } else if (e.touches.length === 2) {
+        isDragging = false;
+        const rect = viewportEl.getBoundingClientRect();
+        const t1 = e.touches[0], t2 = e.touches[1];
+        initialPinchDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        initialPinchZoom = viewZoom;
+        pinchCenterX = (t1.clientX + t2.clientX) / 2 - rect.left;
+        pinchCenterY = (t1.clientY + t2.clientY) / 2 - rect.top;
+      }
+    }, { passive: true });
+
+    viewportEl.addEventListener('touchmove', (e) => {
+      if (!pdfPage) return;
+      e.preventDefault();
+      if (e.touches.length === 1 && isDragging) {
+        viewX = e.touches[0].clientX - dragStartX;
+        viewY = e.touches[0].clientY - dragStartY;
+        updateStageTransform();
+      } else if (e.touches.length === 2 && initialPinchDist) {
+        const t1 = e.touches[0], t2 = e.touches[1];
+        const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+        const factor = (dist / initialPinchDist) * (initialPinchZoom / viewZoom);
+        zoomBy(factor, pinchCenterX, pinchCenterY);
+      }
+    }, { passive: false });
+
+    viewportEl.addEventListener('touchend', (e) => {
+      if (e.touches.length < 2) initialPinchDist = null;
+      if (e.touches.length === 0 && isDragging) {
+        isDragging = false;
+        const touch = e.changedTouches[0];
+        const dist = Math.hypot(touch.clientX - pointerDownPos.x, touch.clientY - pointerDownPos.y);
+        if (dist < 10 && Date.now() - pointerDownTime < 350) {
+          onMapTap(touch.clientX, touch.clientY);
+        }
+      }
+    });
+
+    // =========================================================================
+    // 5. LIVE GPS, SIMULATED GPS & COORDINATE MEASUREMENTS
+    // =========================================================================
+    function onMapTap(clientX, clientY) {
+      if (!pdfPage || !calibration.valid) return;
+      const rect = viewportEl.getBoundingClientRect();
+      const canvasX = (clientX - rect.left - viewX) / viewZoom;
+      const canvasY = (clientY - rect.top - viewY) / viewZoom;
+
+      // Convert canvas pixels -> PDF base points (1.0x)
+      const px = canvasX / renderScale;
+      const py = canvasY / renderScale;
+      if (px < 0 || py < 0 || px > calibration.pageWidth || py > calibration.pageHeight) return;
+
+      const { E, N, lat, lon } = calibration.pdfPointToCoords(px, py);
+      tappedPoint = { px, py, E, N, lat, lon };
+
+      updateBottomBar(E, N, lat, lon, 'Tapped Point');
+      showPointPopup(tappedPoint);
+      drawOverlays();
+    }
+
+    function showPointPopup(pt) {
+      const popup = document.getElementById('point-popup');
+      const body = document.getElementById('popup-body');
+      let distHtml = '';
+
+      if (gpsPosition) {
+        const gpsPt = calibration.wgs84ToPdfPoint(gpsPosition.lat, gpsPosition.lon);
+        const distMeters = Math.hypot(pt.E - gpsPt.E, pt.N - gpsPt.N);
+        const bearing = (Math.atan2(pt.E - gpsPt.E, pt.N - gpsPt.N) * 180 / Math.PI + 360) % 360;
+        const distStr = distMeters >= 1000
+          ? `${(distMeters / 1000).toFixed(2)} km`
+          : `${Math.round(distMeters)} m`;
+        distHtml = `<div style="margin-top:4px; color:#4ade80; font-weight:600;">📏 From GPS: ${distStr} (${Math.round(bearing)}°)</div>`;
+      }
+
+      body.innerHTML = `
+        <div><strong>${calibration.isITM ? 'ITM' : 'Proj'}:</strong> ${Math.round(pt.E)} E, ${Math.round(pt.N)} N</div>
+        <div><strong>WGS84:</strong> ${pt.lat.toFixed(5)}° N, ${pt.lon.toFixed(5)}° E</div>
+        ${distHtml}
+      `;
+      popup.style.display = 'block';
+    }
+
+    function clearTappedPoint() {
+      tappedPoint = null;
+      document.getElementById('point-popup').style.display = 'none';
+      drawOverlays();
+    }
+
+    function updateBottomBar(E, N, lat, lon, sourceLabel) {
+      const prefix = calibration.isITM ? 'ITM' : 'XY';
+      document.getElementById('coord-proj').textContent =
+        `${prefix}: ${Math.round(E).toLocaleString()} E, ${Math.round(N).toLocaleString()} N`;
+      document.getElementById('coord-wgs').textContent =
+        `WGS84: ${lat.toFixed(5)}° N, ${lon.toFixed(5)}° E (${sourceLabel})`;
+    }
+
+    function toggleRealGps() {
+      const fab = document.getElementById('gps-fab');
+      const statusEl = document.getElementById('gps-status-label');
+
+      if (gpsWatchId !== null) {
+        navigator.geolocation.clearWatch(gpsWatchId);
+        gpsWatchId = null;
+        gpsPosition = null;
+        fab.classList.remove('gps-active');
+        statusEl.textContent = 'GPS: Off';
+        drawOverlays();
+        return;
+      }
+
+      if (!navigator.geolocation) {
+        alert('Geolocation is not supported by this browser.');
+        return;
+      }
+
+      statusEl.textContent = 'GPS: Acquiring...';
+      fab.classList.add('gps-active');
+
+      gpsWatchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const { latitude, longitude, accuracy, heading } = pos.coords;
+          const firstFix = !gpsPosition || gpsPosition.simulated;
+          gpsPosition = {
+            lat: latitude,
+            lon: longitude,
+            accuracy: accuracy || 12,
+            heading: heading,
+            simulated: false
+          };
+          statusEl.textContent = `GPS: ±${Math.round(gpsPosition.accuracy)}m`;
+
+          if (calibration.valid) {
+            const pt = calibration.wgs84ToPdfPoint(latitude, longitude);
+            updateBottomBar(pt.E, pt.N, latitude, longitude, 'Live GPS');
+            if (firstFix) {
+              centerOnPdfPoint(pt.px, pt.py);
+            }
+          }
+          drawOverlays();
+        },
+        (err) => {
+          statusEl.textContent = 'GPS: Blocked/Error';
+          fab.classList.remove('gps-active');
+          gpsWatchId = null;
+          alert(
+            `GPS Error (${err.message}).\n\nNote: On Android Chrome, open via HTTPS (GitHub Pages) or localhost for hardware GPS access, or tap 🎯 to test simulated GPS.`
+          );
+        },
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
+      );
+    }
+
+    function simulateGpsInMap() {
+      if (!pdfPage || !calibration.valid) {
+        alert('Please open a GeoPDF first.');
+        return;
+      }
+      // Place simulated GPS near map center (or slightly offset each tap to simulate walking)
+      const jitterX = (Math.random() - 0.5) * calibration.pageWidth * 0.15;
+      const jitterY = (Math.random() - 0.5) * calibration.pageHeight * 0.15;
+      const px = calibration.pageWidth / 2 + jitterX;
+      const py = calibration.pageHeight / 2 + jitterY;
+      const { E, N, lat, lon } = calibration.pdfPointToCoords(px, py);
+
+      gpsPosition = {
+        lat,
+        lon,
+        accuracy: 25,
+        heading: 45,
+        simulated: true
+      };
+
+      document.getElementById('gps-status-label').textContent = 'GPS: Simulated (Test)';
+      updateBottomBar(E, N, lat, lon, 'Simulated GPS');
+      centerOnPdfPoint(px, py);
+      if (tappedPoint) showPointPopup(tappedPoint);
+      drawOverlays();
+    }
+
+    function centerOnPdfPoint(px, py) {
+      const vw = viewportEl.clientWidth;
+      const vh = viewportEl.clientHeight;
+      const canvasX = px * renderScale;
+      const canvasY = py * renderScale;
+      viewX = vw / 2 - canvasX * viewZoom;
+      viewY = vh / 2 - canvasY * viewZoom;
+      updateStageTransform();
+    }
+
+    function drawOverlays() {
+      const ctx = overlayCanvas.getContext('2d');
+      ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      if (!calibration.valid) return;
+
+      // Inverse scale factor so markers stay constant screen size regardless of zoom
+      const invZoom = 1 / viewZoom;
+
+      // 1. Draw Tapped Inspection Crosshair
+      if (tappedPoint) {
+        const cx = tappedPoint.px * renderScale;
+        const cy = tappedPoint.py * renderScale;
+
+        // Line to GPS if active
+        if (gpsPosition) {
+          const gpsPt = calibration.wgs84ToPdfPoint(gpsPosition.lat, gpsPosition.lon);
+          const gx = gpsPt.px * renderScale;
+          const gy = gpsPt.py * renderScale;
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(gx, gy);
+          ctx.lineTo(cx, cy);
+          ctx.strokeStyle = 'rgba(239, 68, 68, 0.85)';
+          ctx.lineWidth = 2.5 * invZoom;
+          ctx.setLineDash([6 * invZoom, 5 * invZoom]);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        ctx.save();
+        const r = 10 * invZoom;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 2.5 * invZoom;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(cx - r * 1.6, cy);
+        ctx.lineTo(cx + r * 1.6, cy);
+        ctx.moveTo(cx, cy - r * 1.6);
+        ctx.lineTo(cx, cy + r * 1.6);
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 2 * invZoom;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 2. Draw Live / Simulated GPS Blue Dot
+      if (gpsPosition) {
+        const pt = calibration.wgs84ToPdfPoint(gpsPosition.lat, gpsPosition.lon);
+        const gx = pt.px * renderScale;
+        const gy = pt.py * renderScale;
+
+        ctx.save();
+        // True-scale accuracy circle in meters
+        const pxPerMeter = calibration.getPixelsPerMeter() * renderScale;
+        const accRadius = Math.max(18 * invZoom, (gpsPosition.accuracy || 15) * pxPerMeter);
+
+        ctx.beginPath();
+        ctx.arc(gx, gy, accRadius, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(37, 99, 235, 0.18)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(37, 99, 235, 0.55)';
+        ctx.lineWidth = 1.5 * invZoom;
+        ctx.stroke();
+
+        // Outer white halo + inner GPS blue dot
+        const dotRadius = 9 * invZoom;
+        ctx.beginPath();
+        ctx.arc(gx, gy, dotRadius, 0, Math.PI * 2);
+        ctx.fillStyle = '#2563eb';
+        ctx.fill();
+        ctx.lineWidth = 3 * invZoom;
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  </script>
+</body>
+</html>
