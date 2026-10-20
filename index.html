@@ -503,9 +503,9 @@
         📂 Open PDF
       </button>
       <select id="dpi-select" class="dpi-select" onchange="onDpiChange()" title="Render Resolution">
-        <option value="1.0">1.0x Fast</option>
-        <option value="1.5" selected>1.5x Crisp</option>
-        <option value="2.0">2.0x HD</option>
+        <option value="1600" selected>⚡ Fast (1600px)</option>
+        <option value="2400">✨ Crisp (2400px)</option>
+        <option value="3400">🔍 Ultra (3400px)</option>
       </select>
       <button id="layers-btn" class="btn" onclick="toggleLayersDrawer()" title="Toggle PDF Layers (OCGs)">
         🗂️ Layers <span id="layer-count">(0)</span>
@@ -658,25 +658,48 @@
       }
 
       /**
-       * Parse ISO 32000 /VP dictionary from raw PDF buffer
+       * Fast byte-pattern finder in Uint8Array (avoids decoding 58MB into a JS string)
        */
-      parseFromBuffer(arrayBuffer, pageWidth, pageHeight) {
+      static findAsciiLast(bytes, patternStr) {
+        const pat = new Uint8Array(patternStr.length);
+        for (let i = 0; i < patternStr.length; i++) pat[i] = patternStr.charCodeAt(i);
+        const first = pat[0];
+        const pLen = pat.length;
+        for (let i = bytes.length - pLen; i >= 0; i--) {
+          if (bytes[i] === first) {
+            let match = true;
+            for (let j = 1; j < pLen; j++) {
+              if (bytes[i + j] !== pat[j]) { match = false; break; }
+            }
+            if (match) return i;
+          }
+        }
+        return -1;
+      }
+
+      /**
+       * Extract slice of ASCII text around a keyword without full-file decode
+       */
+      static extractSliceAround(arrayBuffer, keyword, before = 512, after = 8192) {
+        const bytes = new Uint8Array(arrayBuffer);
+        const idx = GeoPdfCalibration.findAsciiLast(bytes, keyword);
+        if (idx === -1) return '';
+        const start = Math.max(0, idx - before);
+        const end = Math.min(bytes.length, idx + after);
+        return new TextDecoder('latin1').decode(bytes.subarray(start, end));
+      }
+
+      /**
+       * Parse ISO 32000 /VP dictionary from pre-extracted slice
+       */
+      parseFromSlice(searchSlice, pageWidth, pageHeight) {
         this.pageWidth = pageWidth;
         this.pageHeight = pageHeight;
         this.valid = false;
-
-        // Decode latin1 chunks where /VP / /GPTS live (scan last 2MB first for speed, then full file if needed)
-        const bytes = new Uint8Array(arrayBuffer);
-        const decoder = new TextDecoder('latin1');
-        let text = '';
-        const tailStart = Math.max(0, bytes.length - 2 * 1024 * 1024);
-        text = decoder.decode(bytes.subarray(tailStart));
-        if (!text.includes('/GPTS')) {
-          text = decoder.decode(bytes);
+        if (!searchSlice) {
+          this.crsName = 'Page Space (No /VP)';
+          return false;
         }
-
-        const vpIdx = text.lastIndexOf('/VP');
-        const searchSlice = vpIdx !== -1 ? text.slice(vpIdx, vpIdx + 8000) : text;
 
         const bboxMatch = searchSlice.match(/\/BBox\s*\[\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s*\]/);
         const gptsMatch = searchSlice.match(/\/GPTS\s*\[\s*([-\d.\s]+?)\s*\]/);
@@ -1046,14 +1069,19 @@
       await loadGeoPdfFromBuffer(buffer, file.name);
     });
 
-    // Quick-load ../Layout.pdf when testing locally
+    // Quick-load ../Layout_Mobile.pdf (or ../Layout.pdf) when testing locally
     async function loadSampleLayoutPdf() {
       try {
-        showToast('Fetching ../Layout.pdf...');
-        const res = await fetch('../Layout.pdf');
-        if (!res.ok) throw new Error('Use "Select GeoPDF" button to pick Layout.pdf');
+        showToast('Fetching Layout_Mobile.pdf...');
+        let res = await fetch('../Layout_Mobile.pdf');
+        let name = 'Layout_Mobile.pdf';
+        if (!res.ok) {
+          res = await fetch('../Layout.pdf');
+          name = 'Layout.pdf';
+        }
+        if (!res.ok) throw new Error('Use "Select GeoPDF" button to pick PDF');
         const buffer = await res.arrayBuffer();
-        await loadGeoPdfFromBuffer(buffer, 'Layout.pdf');
+        await loadGeoPdfFromBuffer(buffer, name);
       } catch (err) {
         hideToast();
         document.getElementById('file-input').click();
@@ -1061,19 +1089,14 @@
     }
 
     /**
-     * Parse raw /Order [ ... ] hierarchy from PDF catalog so nested OCG arrays
-     * like [ 10 0 R [ 6448 0 R ... 11 0 R [ 811 0 R 806 0 R 83 0 R [ ... ] ] ] ]
-     * preserve their full parent-child tree even when PDF.js flattens unnamed sub-arrays.
+     * Parse raw /Order [ ... ] hierarchy from a 4KB window around /Order
+     * (Avoids decoding 58MB into a JS string on mobile devices)
      */
     function extractRawOrderTree(arrayBuffer) {
       try {
-        const bytes = new Uint8Array(arrayBuffer);
-        const decoder = new TextDecoder('latin1');
-        const text = decoder.decode(bytes);
-        const idx = text.lastIndexOf('/Order');
-        if (idx === -1) return null;
+        const slice = GeoPdfCalibration.extractSliceAround(arrayBuffer, '/Order', 32, 4096);
+        if (!slice) return null;
 
-        const slice = text.slice(idx);
         const start = slice.indexOf('[');
         if (start === -1) return null;
 
@@ -1092,7 +1115,6 @@
         if (end === -1) return null;
 
         const rawOrder = slice.slice(start, end);
-        // Tokenize '[', ']', and '<num> 0 R'
         const tokens = [];
         const re = /\[|\]|(\d+)\s+\d+\s+R/g;
         let m;
@@ -1130,19 +1152,44 @@
       return null;
     }
 
+    const renderCache = new Map();
+
+    function getTargetRenderScale() {
+      if (!pdfPage) return 1.0;
+      const baseVp = pdfPage.getViewport({ scale: 1.0 });
+      const maxDim = Math.max(baseVp.width, baseVp.height, 1);
+      const targetPx = parseFloat(document.getElementById('dpi-select').value || '1600');
+      return targetPx / maxDim;
+    }
+
+    function getLayerStateKey() {
+      const targetPx = document.getElementById('dpi-select').value || '1600';
+      const bits = layerCheckboxes.map(x => (x.cb.checked ? '1' : '0')).join('');
+      return `${targetPx}:${bits}`;
+    }
+
     async function loadGeoPdfFromBuffer(arrayBuffer, fileName) {
       try {
-        showToast(`Parsing PDF & Layers...`);
-        // Clone buffer before PDF.js transfers it to WebWorker
-        const bufferCopy = arrayBuffer.slice(0);
-        rawOrderTree = extractRawOrderTree(bufferCopy);
+        showToast(`Opening ${fileName}...`);
+        renderCache.clear();
 
-        const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+        // Extract /Order and /VP slices from raw bytes BEFORE PDF.js transfers arrayBuffer to Worker
+        // (Zero 58MB buffer cloning and zero full-file string decoding!)
+        rawOrderTree = extractRawOrderTree(arrayBuffer);
+        let vpSlice = GeoPdfCalibration.extractSliceAround(arrayBuffer, '/VP', 64, 8192);
+        if (!vpSlice.includes('/GPTS')) {
+          vpSlice = GeoPdfCalibration.extractSliceAround(arrayBuffer, '/GPTS', 1024, 4096);
+        }
+
+        const loadingTask = pdfjsLib.getDocument({
+          data: arrayBuffer,
+          isOffscreenCanvasSupported: false
+        });
         pdfDoc = await loadingTask.promise;
         pdfPage = await pdfDoc.getPage(1);
 
         const baseViewport = pdfPage.getViewport({ scale: 1.0 });
-        calibration.parseFromBuffer(bufferCopy, baseViewport.width, baseViewport.height);
+        calibration.parseFromSlice(vpSlice, baseViewport.width, baseViewport.height);
 
         document.getElementById('pdf-name-badge').textContent = fileName;
         document.getElementById('crs-name').textContent = calibration.crsName;
@@ -1170,14 +1217,28 @@
       }
       if (mySeq !== renderSeq) return;
 
-      renderScale = parseFloat(document.getElementById('dpi-select').value || '1.5');
-      showToast(`Rendering layers (${renderScale}x)...`);
-
+      renderScale = getTargetRenderScale();
       const viewport = pdfPage.getViewport({ scale: renderScale });
       const targetW = Math.floor(viewport.width);
       const targetH = Math.floor(viewport.height);
 
-      // Render into an offscreen canvas first to prevent white flashes or canvas lock errors
+      // Instant cache hit if this layer combination was already rendered!
+      const cacheKey = getLayerStateKey();
+      if (renderCache.has(cacheKey)) {
+        const cachedCanvas = renderCache.get(cacheKey);
+        pdfCanvas.width = targetW;
+        pdfCanvas.height = targetH;
+        overlayCanvas.width = targetW;
+        overlayCanvas.height = targetH;
+        pdfCanvas.getContext('2d', { alpha: false }).drawImage(cachedCanvas, 0, 0);
+        hideToast();
+        if (fitAfterRender) fitMapToScreen();
+        else drawOverlays();
+        return;
+      }
+
+      showToast(`Rendering map (${targetW}×${targetH}px)...`);
+
       const offscreen = document.createElement('canvas');
       offscreen.width = targetW;
       offscreen.height = targetH;
@@ -1203,6 +1264,13 @@
         const mainCtx = pdfCanvas.getContext('2d', { alpha: false });
         mainCtx.drawImage(offscreen, 0, 0);
 
+        // Save in LRU cache (keep up to 6 recent layer states)
+        if (renderCache.size >= 6) {
+          const oldestKey = renderCache.keys().next().value;
+          renderCache.delete(oldestKey);
+        }
+        renderCache.set(cacheKey, offscreen);
+
         hideToast();
 
         if (fitAfterRender) {
@@ -1221,7 +1289,7 @@
     function onDpiChange() {
       if (!pdfPage) return;
       const oldScale = renderScale;
-      const newScale = parseFloat(document.getElementById('dpi-select').value);
+      const newScale = getTargetRenderScale();
       const ratio = newScale / oldScale;
       viewZoom /= ratio;
       renderPdfPage(false);
